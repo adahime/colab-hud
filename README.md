@@ -52,6 +52,7 @@
 - **Balance, Burn Rate & Active Account**: Polls `/tun/m/ccu-info` and `/tun/m/assignments` to display current Compute Unit balance, live hourly burn rate (`CU/hr`), estimated remaining runtime hours (`balance / rate`), active assignment count, and cached `userinfo.email` so multi-account mismatches are spotted immediately.
 - **On-Demand Hardware Probe (`nvidia-smi`)**: Reads assigned accelerator tier and machine shape (`Standard` / `High-RAM`) immediately from backend assignments, checks Jupyter `/api/kernels` execution state read-only (`idle` / `busy` / `none`), and—only when you click **Probe GPU** or run `--probe`—runs a cached read-only hardware check for exact GPU model (e.g. `NVIDIA A100-SXM4-40GB`), VRAM usage, GPU utilization, system RAM, vCPU count, and root disk usage.
 - **Safe Non-Blocking Keyring Loader**: Reads and refreshes saved `google-colab-cli` tokens silently during polling (`unauthenticated` / `expired` states are reported cleanly instead of hanging on `input()`). Signing in or switching accounts opens Google's OAuth page in your browser and provides a compact authorization-code dialog.
+- **Full Hardware Allocation & Stop Controls**: Pick any of the 13 valid official Google Colab hardware combinations (`CPU`, `T4`, `G4`, `A100`, `H100` in `Standard` / `High-RAM`, single-shape `L4`, plus `TPU v5e-1` / `TPU v6e-1`) right inside the desktop pill card, right-click menu, or side-pane panel to start a runtime (`/tun/m/assign`), open it directly in Colab (`empty.ipynb?dbu=...`), or stop individual/all active VMs (`/tun/m/unassign`). Syncs newly assigned sessions into `google-colab-cli` local state automatically.
 - **Desktop Floating Pill, CLI & Side-Pane Plugin**: Includes a frameless dark-theme Tkinter pill (`launch.bat` / `launch.pyw`) that automatically clears the Windows taskbar when expanded, JSON/table/watch CLI flags, and an Antigravity side-pane plugin (`sidecars/colab_panel/`) with automatic light/dark theme sync and a one-click button to launch the desktop pill.
 - **Zero Duplicate Toolchains**: Automatically locates the `uv`-installed `google-colab-cli` Python environment (`site-packages` / `pythonw.exe`) when launched from system Python or Node.js.
 
@@ -103,6 +104,11 @@ python -m desktop.cli --json
 
 # Probe exact GPU model, VRAM, RAM, vCPU, and disk on the active assignment
 python -m desktop.cli --probe --force
+
+# List all 13 supported preset IDs, allocate a GPU VM, or stop active VMs
+python -m desktop.cli --presets
+python -m desktop.cli --start a100_hm
+python -m desktop.cli --stop-all
 
 # Continuously refresh terminal summary
 python -m desktop.cli --watch --interval 10

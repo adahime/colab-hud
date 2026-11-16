@@ -52,6 +52,7 @@
 - **点数余额、烧钱速率与账号防呆显示**：轮询 Colab 官方会话接口 `/tun/m/ccu-info` 与 `/tun/m/assignments`，展示实时余额、每小时耗点速率（`CU/hr`）、预计还能跑多久（`余额 / 速率`）、活跃实例数以及通过 `userinfo.email` 缓存的当前绑定邮箱，防止多账号切换时连错号。
 - **按需探测 `nvidia-smi` 精确显卡型号**：无需启动额外内核即可直接读取后端返回的加速器型号（`T4` / `L4` / `G4` / `A100` / `H100` / TPU / CPU）与内存规格（`Standard` / `High-RAM`），并只读检查 Jupyter `/api/kernels` 的运行状态（`idle` / `busy` / `none`）；仅当你主动点击**探测显卡**或执行 `--probe` 时，才会在对应实例上执行只读硬件探测以获取具体 GPU 型号（例如 `NVIDIA A100-SXM4-40GB`）、显存占用、GPU 利用率、系统内存、vCPU 核心数与磁盘占用，结果按 `endpoint` 缓存。
 - **无阻塞鉴权与内置浏览器引导弹窗**：后台刷新仅加载并静默续期已存凭证；当未登录或需切号时，内置授权对话框会自动在浏览器打开 Google 登录授权页，粘回页面上的授权码即可保存至系统 keyring。
+- **悬浮窗内直选全套官方配置并开机/关停**：可在桌面胶囊展开卡片、右键菜单或侧边栏面板里直接选择全部 13 种官方支持的硬件配置组合（`CPU`、`T4`、`G4`、`A100`、`H100` 的标准/高内存版，单规格 `L4`，以及 `TPU v5e-1` / `TPU v6e-1`），一键分配开机（`/tun/m/assign`）、跳转 Colab 网页直连该机器，或随时安全关停单个/全部活跃实例（`/tun/m/unassign`），并同步写入 `google-colab-cli` 本地会话列表。
 - **桌面悬浮胶囊、CLI 与侧边栏插件三合一**：桌面端无边框 Tkinter 悬浮胶囊（`launch.bat` / `launch.pyw`）会在底部展开时自动上移避让任务栏；Antigravity 侧边栏插件（`sidecars/colab_panel/`）自动适配 IDE 明暗主题，并支持一键从侧边栏唤起桌面悬浮胶囊。
 - **自动复用 `google-colab-cli` 环境**：无论从系统 Python 还是 Node.js 侧边栏启动，都会自动定位 `uv` 工具环境下的 `google-colab-cli` `site-packages` 与 `pythonw.exe`，无需重复装库。
 
@@ -103,6 +104,11 @@ python -m desktop.cli --json
 
 # 对当前活跃实例执行精确 GPU / VRAM / RAM / CPU / 磁盘探测
 python -m desktop.cli --probe --force
+
+# 列出全部 13 种官方预设配置、启动指定显卡实例或关停所有实例
+python -m desktop.cli --presets
+python -m desktop.cli --start a100_hm
+python -m desktop.cli --stop-all
 
 # 在终端持续刷新监控输出
 python -m desktop.cli --watch --interval 10

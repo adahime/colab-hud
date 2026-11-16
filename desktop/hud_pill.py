@@ -12,10 +12,13 @@ from typing import Any, Dict, List, Optional
 
 from desktop.telemetry import (
     ColabTelemetryStore,
+    RUNTIME_PRESETS,
     begin_oauth_flow,
     clear_saved_auth,
     complete_oauth_flow,
     probe_runtime_hardware,
+    start_runtime,
+    stop_runtime,
 )
 
 
@@ -62,6 +65,14 @@ LANG_PACK = {
         "btn_refresh": "刷新",
         "btn_probe": "探测显卡",
         "btn_login": "授权/切号",
+        "btn_start": "开机启动",
+        "btn_starting": "分配中...",
+        "btn_stop_all": "全部关停",
+        "btn_stop_one": "关停",
+        "btn_open_web": "网页",
+        "launcher_lbl": "新建实例配置",
+        "menu_start": "开机启动新实例",
+        "menu_stop": "关停运行中实例",
         "menu_expand": "展开 / 收起详情",
         "menu_refresh": "立即刷新",
         "menu_probe": "探测精确显卡 (nvidia-smi)",
@@ -74,6 +85,11 @@ LANG_PACK = {
         "menu_interval": "刷新间隔",
         "menu_exit": "退出",
         "probe_err_title": "探测失败",
+        "start_err_title": "启动实例失败",
+        "stop_confirm_title": "确认关停实例",
+        "stop_confirm_one": "确定要关停并释放实例 {summary} ({ep}) 吗？\n未保存到 Google Drive 的本地文件将被清空。",
+        "stop_confirm_all": "确定要关停全部运行中的 Colab 实例吗？\n未保存到 Google Drive 的本地文件将被清空。",
+        "stop_err_title": "关停失败",
     },
     "en": {
         "title": "COLAB-HUD",
@@ -99,6 +115,14 @@ LANG_PACK = {
         "btn_refresh": "Refresh",
         "btn_probe": "Probe GPU",
         "btn_login": "Sign In / Switch",
+        "btn_start": "Start VM",
+        "btn_starting": "Allocating...",
+        "btn_stop_all": "Stop All",
+        "btn_stop_one": "Stop",
+        "btn_open_web": "Open",
+        "launcher_lbl": "Launch Configuration",
+        "menu_start": "Start New Runtime",
+        "menu_stop": "Stop Running Runtime",
         "menu_expand": "Expand / Collapse",
         "menu_refresh": "Refresh Now",
         "menu_probe": "Probe Exact GPU (nvidia-smi)",
@@ -111,6 +135,11 @@ LANG_PACK = {
         "menu_interval": "Refresh Interval",
         "menu_exit": "Exit",
         "probe_err_title": "Probe Failed",
+        "start_err_title": "Runtime Allocation Failed",
+        "stop_confirm_title": "Confirm Stop Runtime",
+        "stop_confirm_one": "Stop and unassign runtime {summary} ({ep})?\nUnsaved local files not on Google Drive will be lost.",
+        "stop_confirm_all": "Stop and unassign ALL running Colab runtimes?\nUnsaved local files not on Google Drive will be lost.",
+        "stop_err_title": "Stop Failed",
     },
 }
 
@@ -172,6 +201,8 @@ class ColabHudPill:
         self.always_on_top = True
         self.pinned = False
         self.probing = False
+        self.vm_busy = False
+        self.selected_preset_id = "t4_std"
         self._drag_origin: Optional[tuple[int, int]] = None
         self._pre_expand_y: Optional[int] = None
         self._last_snap: Optional[Dict[str, Any]] = None
@@ -267,6 +298,73 @@ class ColabHudPill:
         self.hw_body = tk.Frame(self.card, bg=PALETTE["BG_CARD"])
         self.hw_body.pack(fill="x", pady=(3, 6))
 
+        tk.Frame(self.card, bg=PALETTE["BORDER"], height=1).pack(fill="x", pady=4)
+
+        self.launcher_lbl = tk.Label(
+            self.card,
+            text=self._tr("launcher_lbl"),
+            bg=PALETTE["BG_CARD"],
+            fg=PALETTE["FG_DIM"],
+            font=(UI_FONT, 8, "bold"),
+            anchor="w",
+        )
+        self.launcher_lbl.pack(fill="x")
+
+        self.launcher_row = tk.Frame(self.card, bg=PALETTE["BG_CARD"])
+        self.launcher_row.pack(fill="x", pady=(3, 6))
+
+        self.preset_btn = tk.Menubutton(
+            self.launcher_row,
+            text="",
+            bg=PALETTE["BG_PILL"],
+            fg=PALETTE["FG_MAIN"],
+            activebackground=PALETTE["BG_BTN"],
+            activeforeground=PALETTE["FG_MAIN"],
+            font=(UI_FONT, 8),
+            relief="flat",
+            padx=8,
+            pady=3,
+            anchor="w",
+            cursor="hand2",
+            indicatoron=True,
+        )
+        self.preset_menu = tk.Menu(
+            self.preset_btn,
+            tearoff=0,
+            bg=PALETTE["BG_CARD"],
+            fg=PALETTE["FG_MAIN"],
+            activebackground=PALETTE["ACCENT"],
+            activeforeground=PALETTE["FG_MAIN"],
+        )
+        self.preset_btn.config(menu=self.preset_menu)
+        self.preset_btn.pack(side="left", fill="x", expand=True)
+
+        self.btn_start = tk.Label(
+            self.launcher_row,
+            text="",
+            bg=PALETTE["ACCENT"],
+            fg=PALETTE["FG_MAIN"],
+            font=(UI_FONT, 8, "bold"),
+            padx=8,
+            pady=3,
+            cursor="hand2",
+        )
+        self.btn_start.bind("<Button-1>", lambda _e: self._on_start_click())
+        self.btn_start.pack(side="left", padx=(6, 0))
+
+        self.btn_stop_all = tk.Label(
+            self.launcher_row,
+            text="",
+            bg=PALETTE["BG_BTN"],
+            fg=PALETTE["CRIT"],
+            font=(UI_FONT, 8),
+            padx=7,
+            pady=3,
+            cursor="hand2",
+        )
+        self.btn_stop_all.bind("<Button-1>", lambda _e: self._on_stop_click(endpoint=None, stop_all=True))
+        self.btn_stop_all.pack(side="left", padx=(4, 0))
+
         # Footer action bar
         self.footer = tk.Frame(self.card, bg=PALETTE["BG_CARD"])
         self.footer.pack(fill="x")
@@ -314,15 +412,37 @@ class ColabHudPill:
         btn.bind("<Button-1>", lambda _e: command())
         return btn
 
+    def _preset_label(self, preset: Dict[str, Any]) -> str:
+        return preset["label_zh"] if self.lang == "zh" else preset["label_en"]
+
+    def _select_preset(self, preset_id: str) -> None:
+        self.selected_preset_id = preset_id
+        preset = next((p for p in RUNTIME_PRESETS if p["id"] == preset_id), RUNTIME_PRESETS[0])
+        self.preset_btn.config(text=self._preset_label(preset))
+
+    def _rebuild_preset_menu(self) -> None:
+        self.preset_menu.delete(0, "end")
+        for item in RUNTIME_PRESETS:
+            pid = item["id"]
+            self.preset_menu.add_command(
+                label=self._preset_label(item),
+                command=lambda p=pid: self._select_preset(p),
+            )
+        self._select_preset(self.selected_preset_id)
+
     def _apply_button_labels(self) -> None:
         self.val_balance["title"].config(text=self._tr("balance"))
         self.val_rate["title"].config(text=self._tr("rate"))
         self.val_est["title"].config(text=self._tr("est"))
         self.val_vms["title"].config(text=self._tr("vms"))
         self.hw_header.config(text=self._tr("hw_title"))
+        self.launcher_lbl.config(text=self._tr("launcher_lbl"))
+        self.btn_start.config(text=self._tr("btn_starting") if self.vm_busy else self._tr("btn_start"))
+        self.btn_stop_all.config(text=self._tr("btn_stop_all"))
         self.btn_refresh.config(text=self._tr("btn_refresh"))
         self.btn_probe.config(text=self._tr("btn_probe"))
         self.btn_login.config(text=self._tr("btn_login"))
+        self._rebuild_preset_menu()
 
     def _position_default(self) -> None:
         self.root.update_idletasks()
@@ -580,6 +700,70 @@ class ColabHudPill:
         elif res.get("error"):
             messagebox.showwarning(self._tr("probe_err_title"), str(res["error"]))
 
+    def _on_start_click(self, preset_id: Optional[str] = None) -> None:
+        if self.vm_busy:
+            return
+        if not self._last_snap or not self._last_snap.get("authenticated"):
+            self._open_login_dialog(switch_account=False)
+            return
+
+        target_id = preset_id or self.selected_preset_id
+        if preset_id:
+            self._select_preset(preset_id)
+        self.vm_busy = True
+        self.btn_start.config(text=self._tr("btn_starting"))
+
+        def worker() -> None:
+            res = start_runtime(target_id)
+            self.root.after(0, lambda: self._finish_start(res))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_start(self, res: Dict[str, Any]) -> None:
+        self.vm_busy = False
+        self.btn_start.config(text=self._tr("btn_start"))
+        if res.get("ok"):
+            threading.Thread(target=self.store.refresh_now, daemon=True).start()
+        elif res.get("error"):
+            messagebox.showwarning(self._tr("start_err_title"), str(res["error"]))
+
+    def _on_stop_click(
+        self,
+        endpoint: Optional[str] = None,
+        stop_all: bool = False,
+        summary: str = "",
+    ) -> None:
+        if self.vm_busy:
+            return
+        runtimes = (self._last_snap or {}).get("runtimes") or []
+        if not runtimes:
+            return
+
+        if stop_all:
+            prompt = self._tr("stop_confirm_all")
+        else:
+            prompt = self._tr("stop_confirm_one").format(
+                summary=summary or "Colab VM",
+                ep=(endpoint or "")[:10],
+            )
+        if not messagebox.askyesno(self._tr("stop_confirm_title"), prompt):
+            return
+
+        self.vm_busy = True
+
+        def worker() -> None:
+            res = stop_runtime(endpoint=endpoint, stop_all=stop_all)
+            self.root.after(0, lambda: self._finish_stop(res))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_stop(self, res: Dict[str, Any]) -> None:
+        self.vm_busy = False
+        if res.get("ok") or res.get("stopped"):
+            threading.Thread(target=self.store.refresh_now, daemon=True).start()
+        if res.get("error"):
+            messagebox.showwarning(self._tr("stop_err_title"), str(res["error"]))
+
     def _show_context_menu(self, event: tk.Event) -> None:
         menu = tk.Menu(
             self.root,
@@ -591,6 +775,7 @@ class ColabHudPill:
         )
         has_vm = bool(self._last_snap and self._last_snap.get("runtimes"))
         is_authed = bool(self._last_snap and self._last_snap.get("authenticated"))
+        runtimes = (self._last_snap or {}).get("runtimes") or []
 
         menu.add_command(label=self._tr("menu_expand"), command=self.toggle_expand)
         menu.add_command(label=self._tr("menu_refresh"), command=self._on_refresh_click)
@@ -599,6 +784,40 @@ class ColabHudPill:
             command=self._on_probe_click,
             state="normal" if has_vm else "disabled",
         )
+
+        start_menu = tk.Menu(menu, tearoff=0, bg=PALETTE["BG_CARD"], fg=PALETTE["FG_MAIN"])
+        for preset in RUNTIME_PRESETS:
+            pid = preset["id"]
+            start_menu.add_command(
+                label=self._preset_label(preset),
+                command=lambda p=pid: self._on_start_click(preset_id=p),
+            )
+        menu.add_cascade(
+            label=self._tr("menu_start"),
+            menu=start_menu,
+            state="normal" if is_authed else "disabled",
+        )
+
+        stop_menu = tk.Menu(menu, tearoff=0, bg=PALETTE["BG_CARD"], fg=PALETTE["FG_MAIN"])
+        for rt in runtimes:
+            ep = rt.get("endpoint") or ""
+            lbl = f"{rt.get('summary_label', 'Runtime')} ({ep[:8]})"
+            stop_menu.add_command(
+                label=lbl,
+                command=lambda e=ep, s=rt.get("summary_label", "Runtime"): self._on_stop_click(endpoint=e, summary=s),
+            )
+        if len(runtimes) > 1:
+            stop_menu.add_separator()
+        stop_menu.add_command(
+            label=self._tr("btn_stop_all"),
+            command=lambda: self._on_stop_click(stop_all=True),
+        )
+        menu.add_cascade(
+            label=self._tr("menu_stop"),
+            menu=stop_menu,
+            state="normal" if has_vm else "disabled",
+        )
+
         menu.add_separator()
         menu.add_command(
             label=self._tr("menu_login"),
@@ -663,17 +882,50 @@ class ColabHudPill:
             box = tk.Frame(self.hw_body, bg=PALETTE["BG_PILL"], padx=8, pady=5)
             box.pack(fill="x", pady=2)
 
+            top_row = tk.Frame(box, bg=PALETTE["BG_PILL"])
+            top_row.pack(fill="x")
+
             k_state = rt.get("kernel_state")
             badge_str = f"[{k_state}]" if k_state and k_state != "none" else ""
-            title = f"{rt.get('summary_label', 'Runtime')} {badge_str}".strip()
+            summary = rt.get("summary_label", "Runtime")
+            title = f"{summary} {badge_str}".strip()
             tk.Label(
-                box,
+                top_row,
                 text=title,
                 bg=PALETTE["BG_PILL"],
                 fg=PALETTE["LIVE"],
                 font=(MONO_FONT, 9, "bold"),
                 anchor="w",
-            ).pack(fill="x")
+            ).pack(side="left", fill="x", expand=True)
+
+            ep = rt.get("endpoint") or ""
+            stop_btn = tk.Label(
+                top_row,
+                text=self._tr("btn_stop_one"),
+                bg=PALETTE["BG_BTN"],
+                fg=PALETTE["CRIT"],
+                font=(UI_FONT, 7),
+                padx=5,
+                pady=1,
+                cursor="hand2",
+            )
+            stop_btn.bind("<Button-1>", lambda _e, e=ep, s=summary: self._on_stop_click(endpoint=e, summary=s))
+            stop_btn.pack(side="right", padx=(4, 0))
+
+            colab_url = rt.get("colab_url")
+            if colab_url:
+                open_btn = tk.Label(
+                    top_row,
+                    text=self._tr("btn_open_web"),
+                    bg=PALETTE["BG_BTN"],
+                    fg=PALETTE["FG_MAIN"],
+                    font=(UI_FONT, 7),
+                    padx=5,
+                    pady=1,
+                    cursor="hand2",
+                )
+                open_btn.bind("<Button-1>", lambda _e, u=colab_url: webbrowser.open(u))
+                open_btn.pack(side="right")
 
             probe = rt.get("probe")
             if probe:
@@ -760,6 +1012,7 @@ class ColabHudPill:
             self.val_est["value"].config(text="--", fg=PALETTE["FG_DIM"])
             self.val_vms["value"].config(text="0", fg=PALETTE["FG_DIM"])
             self.btn_probe.config(fg=PALETTE["FG_DIM"])
+            self.btn_stop_all.config(fg=PALETTE["FG_DIM"])
             self._render_runtimes([])
         else:
             email = snap.get("account_email") or self._tr("acct_unknown")
@@ -790,6 +1043,7 @@ class ColabHudPill:
             self.val_est["value"].config(text=_fmt_hours(snap.get("est_hours_left"), self.lang), fg=PALETTE["FG_MAIN"])
             self.val_vms["value"].config(text=str(snap.get("assignments_count", len(runtimes))), fg=PALETTE["FG_MAIN"])
             self.btn_probe.config(fg=PALETTE["FG_MAIN"] if runtimes else PALETTE["FG_DIM"])
+            self.btn_stop_all.config(fg=PALETTE["CRIT"] if runtimes else PALETTE["FG_DIM"])
             self._render_runtimes(runtimes)
 
     def _poll_ui(self) -> None:

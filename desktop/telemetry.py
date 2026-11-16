@@ -16,9 +16,28 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote
+
+
+RUNTIME_PRESETS: List[Dict[str, Any]] = [
+    {"id": "cpu_std", "label_zh": "CPU · 标准内存", "label_en": "CPU · Standard", "variant": "DEFAULT", "accelerator": "NONE", "high_mem": False},
+    {"id": "cpu_hm", "label_zh": "CPU · 高内存 (High-RAM)", "label_en": "CPU · High-RAM", "variant": "DEFAULT", "accelerator": "NONE", "high_mem": True},
+    {"id": "t4_std", "label_zh": "T4 GPU · 标准内存", "label_en": "T4 GPU · Standard", "variant": "GPU", "accelerator": "T4", "high_mem": False},
+    {"id": "t4_hm", "label_zh": "T4 GPU · 高内存", "label_en": "T4 GPU · High-RAM", "variant": "GPU", "accelerator": "T4", "high_mem": True},
+    {"id": "l4", "label_zh": "L4 GPU (高内存固定)", "label_en": "L4 GPU", "variant": "GPU", "accelerator": "L4", "high_mem": False},
+    {"id": "g4_std", "label_zh": "G4 GPU · 标准内存", "label_en": "G4 GPU · Standard", "variant": "GPU", "accelerator": "G4", "high_mem": False},
+    {"id": "g4_hm", "label_zh": "G4 GPU · 高内存", "label_en": "G4 GPU · High-RAM", "variant": "GPU", "accelerator": "G4", "high_mem": True},
+    {"id": "a100_std", "label_zh": "A100 GPU · 标准内存", "label_en": "A100 GPU · Standard", "variant": "GPU", "accelerator": "A100", "high_mem": False},
+    {"id": "a100_hm", "label_zh": "A100 GPU · 高内存", "label_en": "A100 GPU · High-RAM", "variant": "GPU", "accelerator": "A100", "high_mem": True},
+    {"id": "h100_std", "label_zh": "H100 GPU · 标准内存", "label_en": "H100 GPU · Standard", "variant": "GPU", "accelerator": "H100", "high_mem": False},
+    {"id": "h100_hm", "label_zh": "H100 GPU · 高内存", "label_en": "H100 GPU · High-RAM", "variant": "GPU", "accelerator": "H100", "high_mem": True},
+    {"id": "v5e1", "label_zh": "TPU v5e-1", "label_en": "TPU v5e-1", "variant": "TPU", "accelerator": "V5E1", "high_mem": False},
+    {"id": "v6e1", "label_zh": "TPU v6e-1", "label_en": "TPU v6e-1", "variant": "TPU", "accelerator": "V6E1", "high_mem": False},
+]
 
 
 CACHE_DIR = Path.home() / ".cache" / "colab-hud"
@@ -389,6 +408,203 @@ def format_runtime_summary(accelerator: str, variant: str, shape_label: str) -> 
     return hw
 
 
+def build_colab_notebook_url(endpoint: str, host: str = "https://colab.research.google.com") -> str:
+    """Build a Colab notebook URL targeting an already-assigned runtime endpoint."""
+    host_clean = host.rstrip("/")
+    backend_path = f"/tun/m/{endpoint}"
+    return f"{host_clean}/notebooks/empty.ipynb?dbu={quote(backend_path, safe='')}#datalabBackendUrl={host_clean}{backend_path}"
+
+
+def get_runtime_presets() -> List[Dict[str, Any]]:
+    """Return all supported Google Colab accelerator and machine-shape combinations."""
+    return [dict(item) for item in RUNTIME_PRESETS]
+
+
+def _remove_probe_cache_entry(endpoint: str) -> None:
+    cache = _load_probe_cache()
+    if endpoint in cache:
+        del cache[endpoint]
+        _write_json_file(PROBE_CACHE_PATH, cache)
+
+
+def _record_assigned_session_state(
+    name: str,
+    endpoint: str,
+    proxy_info: Any,
+    variant_val: str,
+    accelerator_val: str,
+    shape: Any,
+) -> None:
+    """Sync newly created runtime into ``colab_cli`` StateStore so CLI tools recognize it."""
+    try:
+        from colab_cli.client import Shape
+        from colab_cli.history import HistoryLogger
+        from colab_cli.state import SessionState, StateStore
+
+        token = getattr(proxy_info, "token", "") if proxy_info else ""
+        url = getattr(proxy_info, "url", "") if proxy_info else ""
+        expires_at = proxy_info.expires_at() if hasattr(proxy_info, "expires_at") else None
+        shape_name = Shape.HIGH_RAM.name if shape == Shape.HIGH_RAM else Shape.STANDARD.name
+
+        store = StateStore()
+        store.add(
+            SessionState(
+                name=name,
+                token=token,
+                url=url,
+                endpoint=endpoint,
+                token_expires_at=expires_at,
+                variant=variant_val,
+                accelerator=accelerator_val,
+                machine_shape=shape_name,
+            )
+        )
+        HistoryLogger().log_event(
+            name,
+            "session_created",
+            {
+                "endpoint": endpoint,
+                "variant": variant_val,
+                "accelerator": accelerator_val,
+                "machine_shape": shape_name,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _remove_assigned_session_state(endpoint: str) -> None:
+    try:
+        from colab_cli.history import HistoryLogger
+        from colab_cli.state import StateStore
+
+        store = StateStore()
+        history = HistoryLogger()
+        all_sessions = store.load()
+        for sess_name, sess in list(all_sessions.items()):
+            if getattr(sess, "endpoint", None) == endpoint:
+                store.remove(sess_name)
+                history.log_event(sess_name, "session_terminated", {"reason": "user_requested"})
+    except Exception:
+        pass
+
+
+def start_runtime(preset_id: str, session_name: Optional[str] = None) -> Dict[str, Any]:
+    """Allocate a new Google Colab runtime for the chosen hardware preset."""
+    preset = next((p for p in RUNTIME_PRESETS if p["id"] == preset_id), None)
+    if preset is None:
+        return {"ok": False, "error": f"Unknown runtime preset: {preset_id}"}
+
+    creds, auth_state, err_msg, _ = load_cached_credentials()
+    if creds is None:
+        return {"ok": False, "auth_state": auth_state, "error": err_msg or "Not authenticated"}
+
+    from google.auth.transport.requests import AuthorizedSession
+    from colab_cli.client import (
+        Accelerator,
+        Client,
+        ColabRequestError,
+        Prod,
+        TooManyAssignmentsError,
+        Variant,
+        resolve_assign_shape,
+    )
+    from colab_cli.utils import get_status_code
+
+    session = AuthorizedSession(creds)
+    client = Client(Prod(), session)
+
+    variant = Variant(preset["variant"])
+    accelerator = Accelerator(preset["accelerator"])
+    shape = resolve_assign_shape(accelerator, high_mem=bool(preset.get("high_mem")))
+    name = (session_name or "").strip() or uuid.uuid4().hex[:6]
+
+    try:
+        res = client.assign(uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape)
+    except TooManyAssignmentsError:
+        return {
+            "ok": False,
+            "error": "Allocation refused (HTTP 412): concurrent VM limit or capacity reached. Stop an active VM first.",
+        }
+    except ColabRequestError as exc:
+        status = get_status_code(exc)
+        if status == 400 and accelerator != Accelerator.NONE:
+            return {
+                "ok": False,
+                "error": f"Account lacks quota or entitlement for {accelerator.value} (HTTP 400). Try T4 or CPU.",
+            }
+        return {"ok": False, "error": f"Colab assign failed ({status or 'error'}): {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    endpoint = getattr(res, "endpoint", "")
+    proxy_info = getattr(res, "runtime_proxy_info", None)
+    _record_assigned_session_state(name, endpoint, proxy_info, variant.value, accelerator.value, shape)
+
+    return {
+        "ok": True,
+        "endpoint": endpoint,
+        "session_name": name,
+        "preset_id": preset_id,
+        "summary_label": format_runtime_summary(
+            accelerator.value,
+            variant.value,
+            "High-RAM" if shape and shape.name == "HIGH_RAM" else "Standard",
+        ),
+        "colab_url": build_colab_notebook_url(endpoint) if endpoint else None,
+    }
+
+
+def stop_runtime(endpoint: Optional[str] = None, stop_all: bool = False) -> Dict[str, Any]:
+    """Unassign and shut down one or all active Google Colab runtimes."""
+    creds, auth_state, err_msg, _ = load_cached_credentials()
+    if creds is None:
+        return {"ok": False, "auth_state": auth_state, "error": err_msg or "Not authenticated"}
+
+    from google.auth.transport.requests import AuthorizedSession
+    from colab_cli.client import Client, Prod
+
+    session = AuthorizedSession(creds)
+    client = Client(Prod(), session)
+
+    try:
+        assignments = client.list_assignments()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if not assignments:
+        return {"ok": False, "error": "No active Colab runtime assignment to stop"}
+
+    if stop_all:
+        targets = list(assignments)
+    elif endpoint:
+        targets = [a for a in assignments if a.endpoint == endpoint]
+        if not targets:
+            return {"ok": False, "error": f"Active assignment not found for endpoint {endpoint}"}
+    elif len(assignments) == 1:
+        targets = [assignments[0]]
+    else:
+        return {"ok": False, "error": "Multiple active runtimes found; specify endpoint or stop_all=True"}
+
+    stopped: List[str] = []
+    errors: List[str] = []
+    for item in targets:
+        try:
+            client.unassign(item.endpoint)
+            _remove_assigned_session_state(item.endpoint)
+            _remove_probe_cache_entry(item.endpoint)
+            stopped.append(item.endpoint)
+        except Exception as exc:
+            errors.append(f"{item.endpoint}: {exc}")
+
+    return {
+        "ok": len(stopped) > 0 and not errors,
+        "stopped": stopped,
+        "errors": errors,
+        "error": "; ".join(errors) if errors else None,
+    }
+
+
 def _inspect_proxy_kernels(proxy_url: str, proxy_token: str) -> Tuple[Optional[int], Optional[str], Optional[str]]:
     """Read-only HTTP check of ``/api/kernels`` on an active runtime proxy."""
     if not proxy_url or not proxy_token:
@@ -476,6 +692,7 @@ def fetch_snapshot(options: Optional[FetchOptions] = None) -> Dict[str, Any]:
         "assignments_count": 0,
         "est_hours_left": None,
         "runtimes": [],
+        "presets": get_runtime_presets(),
         "colab_cli_found": bool(colab_exe),
         "error": None,
     }
@@ -532,6 +749,7 @@ def fetch_snapshot(options: Optional[FetchOptions] = None) -> Dict[str, Any]:
                 "machine_shape": shape_label,
                 "summary_label": format_runtime_summary(acc_val, var_name, shape_label),
                 "proxy_url": proxy_url,
+                "colab_url": build_colab_notebook_url(item.endpoint),
                 "token_expires_in_s": expires_s,
                 "kernels_count": k_count,
                 "kernel_state": k_state,
@@ -553,6 +771,7 @@ def fetch_snapshot(options: Optional[FetchOptions] = None) -> Dict[str, Any]:
             "assignments_count": int(usage.assignments_count),
             "est_hours_left": est_hours,
             "runtimes": runtimes,
+            "presets": get_runtime_presets(),
             "error": None,
         }
     )

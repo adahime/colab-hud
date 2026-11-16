@@ -204,6 +204,76 @@ class TestColabHudTelemetry(unittest.TestCase):
         finally:
             pill.close()
 
+    def test_runtime_presets_and_start_stop(self) -> None:
+        telemetry.bootstrap_colab_cli()
+        from colab_cli.client import Accelerator, Shape, TooManyAssignmentsError, Variant
+
+        presets = telemetry.get_runtime_presets()
+        self.assertEqual(len(presets), 13)
+        preset_ids = {p["id"] for p in presets}
+        for required in ("cpu_std", "cpu_hm", "t4_std", "t4_hm", "l4", "g4_std", "g4_hm", "a100_std", "a100_hm", "h100_std", "h100_hm", "v5e1", "v6e1"):
+            self.assertIn(required, preset_ids)
+
+        mock_client = MagicMock()
+        mock_client.assign.return_value = SimpleNamespace(
+            endpoint="ep-new-l4",
+            runtime_proxy_info=SimpleNamespace(url="https://proxy.example.invalid", token="tok-new"),
+        )
+
+        with (
+            patch("desktop.telemetry.load_cached_credentials", return_value=(MagicMock(), "ok", None, "fp")),
+            patch("google.auth.transport.requests.AuthorizedSession", return_value=MagicMock()),
+            patch("colab_cli.client.Client", return_value=mock_client),
+            patch("desktop.telemetry._record_assigned_session_state") as rec_mock,
+        ):
+            res_l4 = telemetry.start_runtime("l4", session_name="test-l4")
+            self.assertTrue(res_l4["ok"])
+            self.assertEqual(res_l4["endpoint"], "ep-new-l4")
+            self.assertIn("datalabBackendUrl=", res_l4["colab_url"])
+            _, kwargs = mock_client.assign.call_args
+            self.assertEqual(kwargs["variant"], Variant.GPU)
+            self.assertEqual(kwargs["accelerator"], Accelerator.L4)
+            # L4 is single high-mem shape so resolve_assign_shape omits shape param.
+            self.assertIsNone(kwargs["shape"])
+            rec_mock.assert_called_once()
+
+            mock_client.reset_mock()
+            res_a100 = telemetry.start_runtime("a100_hm")
+            self.assertTrue(res_a100["ok"])
+            _, kwargs2 = mock_client.assign.call_args
+            self.assertEqual(kwargs2["accelerator"], Accelerator.A100)
+            self.assertEqual(kwargs2["shape"], Shape.HIGH_RAM)
+
+            mock_client.assign.side_effect = TooManyAssignmentsError("limit")
+            res_412 = telemetry.start_runtime("t4_std")
+            self.assertFalse(res_412["ok"])
+            self.assertIn("412", res_412["error"])
+
+        mock_stop_client = MagicMock()
+        mock_stop_client.list_assignments.return_value = [
+            SimpleNamespace(endpoint="ep-1"),
+            SimpleNamespace(endpoint="ep-2"),
+        ]
+        with (
+            patch("desktop.telemetry.load_cached_credentials", return_value=(MagicMock(), "ok", None, "fp")),
+            patch("google.auth.transport.requests.AuthorizedSession", return_value=MagicMock()),
+            patch("colab_cli.client.Client", return_value=mock_stop_client),
+            patch("desktop.telemetry._remove_assigned_session_state") as rm_sess,
+            patch("desktop.telemetry._remove_probe_cache_entry") as rm_probe,
+        ):
+            res_one = telemetry.stop_runtime(endpoint="ep-2")
+            self.assertTrue(res_one["ok"])
+            self.assertEqual(res_one["stopped"], ["ep-2"])
+            mock_stop_client.unassign.assert_called_once_with("ep-2")
+            rm_sess.assert_called_once_with("ep-2")
+            rm_probe.assert_called_once_with("ep-2")
+
+            mock_stop_client.unassign.reset_mock()
+            res_all = telemetry.stop_runtime(stop_all=True)
+            self.assertTrue(res_all["ok"])
+            self.assertEqual(res_all["stopped"], ["ep-1", "ep-2"])
+            self.assertEqual(mock_stop_client.unassign.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

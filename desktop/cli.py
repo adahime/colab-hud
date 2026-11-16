@@ -14,8 +14,11 @@ from desktop.telemetry import (
     clear_saved_auth,
     complete_oauth_flow,
     fetch_snapshot,
+    get_runtime_presets,
     launch_interactive_login,
     probe_runtime_hardware,
+    start_runtime,
+    stop_runtime,
 )
 
 
@@ -52,7 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cli", action="store_true", help="Print terminal summary and exit")
     parser.add_argument("--watch", action="store_true", help="Continuously refresh terminal output")
     parser.add_argument("--probe", action="store_true", help="Probe exact GPU/VRAM/RAM via runtime proxy and exit")
-    parser.add_argument("--endpoint", type=str, default=None, help="Target runtime endpoint for --probe")
+    parser.add_argument("--presets", action="store_true", help="Print all supported runtime presets as JSON and exit")
+    parser.add_argument("--start", type=str, default=None, help="Allocate and start a Colab runtime by preset ID")
+    parser.add_argument("--session", type=str, default=None, help="Optional session name when using --start")
+    parser.add_argument("--stop", action="store_true", help="Unassign and stop an active Colab runtime")
+    parser.add_argument("--stop-all", action="store_true", help="Unassign and stop all active Colab runtimes")
+    parser.add_argument("--endpoint", type=str, default=None, help="Target runtime endpoint for --probe or --stop")
     parser.add_argument("--force", action="store_true", help="Force temporary kernel probe even if kernel is busy")
     parser.add_argument("--login", action="store_true", help="Launch interactive Colab OAuth sign-in terminal")
     parser.add_argument("--oauth-prompt", action="store_true", help="Run browser-assisted OAuth prompt in current terminal")
@@ -113,6 +121,20 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.login or args.switch_account:
         result = launch_interactive_login(switch_account=args.switch_account)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("ok") else 1
+
+    if args.presets:
+        print(json.dumps(get_runtime_presets(), ensure_ascii=False))
+        return 0
+
+    if args.start:
+        result = start_runtime(args.start, session_name=args.session)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("ok") else 1
+
+    if args.stop or args.stop_all:
+        result = stop_runtime(endpoint=args.endpoint, stop_all=args.stop_all)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("ok") else 1
 

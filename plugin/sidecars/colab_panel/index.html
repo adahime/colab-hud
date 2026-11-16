@@ -45,6 +45,17 @@
 
     <section class="panel-section">
       <div class="section-head">
+        <span id="lbl-launcher" class="section-title">Launch Runtime</span>
+      </div>
+      <div class="launcher-bar">
+        <select id="preset-select" class="preset-select"></select>
+        <button id="start-btn" class="chip-btn primary" type="button">Start VM</button>
+        <button id="stop-all-btn" class="chip-btn danger" type="button">Stop All</button>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head">
         <span id="lbl-runtimes" class="section-title">Active Runtime & Hardware</span>
         <div class="section-actions">
           <button id="probe-btn" class="chip-btn" type="button">Probe GPU</button>

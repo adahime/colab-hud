@@ -11,7 +11,19 @@
       signOut: '退出授权',
       lblBalance: '当前点数余额',
       lblRate: '每小时消耗费率',
+      lblLauncher: '新建实例配置',
       lblRuntimes: '当前配置与精确硬件',
+      startVm: '开机启动',
+      startingVm: '分配中...',
+      stopAll: '全部关停',
+      stopOne: '关停',
+      confirmStop: '确定关停?',
+      stopping: '关停中...',
+      openWeb: '打开 Colab',
+      startOk: (s) => `已分配并启动实例：${s}`,
+      startFail: (e) => `启动实例失败：${e}`,
+      stopOk: (n) => `已关停 ${n} 个实例`,
+      stopFail: (e) => `关停失败：${e}`,
       probe: '探测精确显卡',
       probing: '探测中...',
       refresh: '刷新',
@@ -46,7 +58,19 @@
       signOut: 'Sign Out',
       lblBalance: 'CU Balance',
       lblRate: 'Hourly Burn Rate',
+      lblLauncher: 'Launch Configuration',
       lblRuntimes: 'Active Runtime & Hardware',
+      startVm: 'Start VM',
+      startingVm: 'Allocating...',
+      stopAll: 'Stop All',
+      stopOne: 'Stop',
+      confirmStop: 'Confirm Stop?',
+      stopping: 'Stopping...',
+      openWeb: 'Open Colab',
+      startOk: (s) => `Runtime allocated: ${s}`,
+      startFail: (e) => `Failed to allocate runtime: ${e}`,
+      stopOk: (n) => `Stopped ${n} runtime(s)`,
+      stopFail: (e) => `Stop failed: ${e}`,
       probe: 'Probe GPU',
       probing: 'Probing...',
       refresh: 'Refresh',
@@ -80,6 +104,8 @@
     etag: '',
     lastSnap: null,
     timer: null,
+    confirmEndpoint: '',
+    confirmTimer: null,
   };
 
   try {
@@ -133,10 +159,26 @@
     $('pill-btn').textContent = t.pillBtn;
     $('lbl-balance').textContent = t.lblBalance;
     $('lbl-rate').textContent = t.lblRate;
+    $('lbl-launcher').textContent = t.lblLauncher;
     $('lbl-runtimes').textContent = t.lblRuntimes;
+    $('start-btn').textContent = t.startVm;
+    $('stop-all-btn').textContent = t.stopAll;
     $('probe-btn').textContent = t.probe;
     $('refresh-btn').textContent = t.refresh;
     $('logout-btn').textContent = t.signOut;
+  }
+
+  function syncPresetOptions(presets) {
+    const sel = $('preset-select');
+    const list = presets && presets.length ? presets : [];
+    const sig = `${state.lang}|${list.map((p) => p.id).join(',')}`;
+    if (!list.length || sel.dataset.sig === sig) return;
+    const prev = sel.value || 't4_std';
+    sel.innerHTML = list
+      .map((p) => `<option value="${esc(p.id)}">${esc(state.lang === 'zh' ? p.label_zh : p.label_en)}</option>`)
+      .join('');
+    sel.dataset.sig = sig;
+    sel.value = list.some((p) => p.id === prev) ? prev : list[0].id;
   }
 
   function renderRuntimes(snap) {
@@ -156,6 +198,7 @@
     list.innerHTML = runtimes.map((rt) => {
       const probe = rt.probe;
       const kState = rt.kernel_state || 'none';
+      const ep = rt.endpoint || '';
       let bodyHtml = `<div class="runtime-meta" style="margin-top:6px;">${esc(t.unprobedHint)}</div>`;
       if (probe) {
         const vramTxt = probe.vram_total_mb
@@ -181,11 +224,22 @@
         `;
       }
 
+      const openLink = rt.colab_url
+        ? `<a class="chip-btn mini" href="${esc(rt.colab_url)}" target="_blank" rel="noopener">${esc(t.openWeb)}</a>`
+        : '';
+      const stopLabel = state.confirmEndpoint === ep ? t.confirmStop : t.stopOne;
+
       return `
         <div class="runtime-card">
           <div class="runtime-top">
-            <span class="runtime-model">${esc(rt.summary_label)}</span>
-            <span class="runtime-meta">${esc(t.kernel)}: ${esc(kState)} · ${esc(rt.machine_shape || '')}</span>
+            <div>
+              <span class="runtime-model">${esc(rt.summary_label)}</span>
+              <div class="runtime-meta">${esc(t.kernel)}: ${esc(kState)} · ${esc(rt.machine_shape || '')}</div>
+            </div>
+            <div class="section-actions">
+              ${openLink}
+              <button class="chip-btn mini danger stop-vm-btn" type="button" data-ep="${esc(ep)}">${esc(stopLabel)}</button>
+            </div>
           </div>
           ${bodyHtml}
         </div>
@@ -196,6 +250,7 @@
   function render(snap) {
     const t = tr();
     state.lastSnap = snap;
+    syncPresetOptions(snap.presets || []);
     const badge = $('status-badge');
     const statusText = $('status-text');
     const hasVms = (snap.runtimes || []).length > 0;
@@ -212,6 +267,8 @@
       $('sub-est').textContent = '--';
       $('sub-vms').textContent = '--';
       $('probe-btn').disabled = true;
+      $('start-btn').disabled = true;
+      $('stop-all-btn').disabled = true;
     } else {
       badge.className = hasVms ? 'badge live' : 'badge ok';
       statusText.textContent = hasVms ? t.badgeOk : t.badgeIdle;
@@ -228,6 +285,8 @@
       $('sub-est').textContent = t.estHours(snap.est_hours_left);
       $('sub-vms').textContent = t.activeVms(snap.assignments_count ?? (snap.runtimes || []).length);
       $('probe-btn').disabled = !hasVms;
+      $('start-btn').disabled = false;
+      $('stop-all-btn').disabled = !hasVms;
     }
 
     renderRuntimes(snap);
@@ -315,6 +374,95 @@
       showToast(tr().pillLaunched);
     } catch (err) {
       showToast(String(err.message || err));
+    }
+  });
+
+  $('start-btn').addEventListener('click', async () => {
+    const btn = $('start-btn');
+    const presetId = $('preset-select').value;
+    if (!presetId) return;
+    btn.disabled = true;
+    btn.textContent = tr().startingVm;
+    try {
+      const res = await apiCall('/api/start', 'POST', { presetId });
+      if (res.snapshot) {
+        if (res.snapshot.etag) state.etag = res.snapshot.etag;
+        render(res.snapshot);
+      }
+      if (res.startResult?.ok) showToast(tr().startOk(res.startResult.summary_label || presetId));
+      else showToast(tr().startFail(res.startResult?.error || 'Unknown'));
+    } catch (err) {
+      showToast(tr().startFail(err.message || err));
+    } finally {
+      btn.textContent = tr().startVm;
+      btn.disabled = !state.lastSnap?.authenticated;
+    }
+  });
+
+  async function doStop(payload) {
+    const res = await apiCall('/api/stop', 'POST', payload);
+    state.confirmEndpoint = '';
+    if (res.snapshot) {
+      if (res.snapshot.etag) state.etag = res.snapshot.etag;
+      render(res.snapshot);
+    }
+    const stopRes = res.stopResult || {};
+    if (stopRes.ok || (stopRes.stopped && stopRes.stopped.length)) {
+      showToast(tr().stopOk((stopRes.stopped || []).length));
+    } else {
+      showToast(tr().stopFail(stopRes.error || 'Unknown'));
+    }
+  }
+
+  $('stop-all-btn').addEventListener('click', async () => {
+    const btn = $('stop-all-btn');
+    if (state.confirmEndpoint !== '__ALL__') {
+      state.confirmEndpoint = '__ALL__';
+      btn.textContent = tr().confirmStop;
+      clearTimeout(state.confirmTimer);
+      state.confirmTimer = setTimeout(() => {
+        if (state.confirmEndpoint === '__ALL__') {
+          state.confirmEndpoint = '';
+          btn.textContent = tr().stopAll;
+        }
+      }, 3500);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = tr().stopping;
+    try {
+      await doStop({ all: true });
+    } catch (err) {
+      showToast(tr().stopFail(err.message || err));
+    } finally {
+      btn.textContent = tr().stopAll;
+      btn.disabled = !(state.lastSnap?.runtimes?.length);
+    }
+  });
+
+  $('runtime-list').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('.stop-vm-btn');
+    if (!btn) return;
+    const ep = btn.dataset.ep || '';
+    if (!ep) return;
+    if (state.confirmEndpoint !== ep) {
+      state.confirmEndpoint = ep;
+      if (state.lastSnap) renderRuntimes(state.lastSnap);
+      clearTimeout(state.confirmTimer);
+      state.confirmTimer = setTimeout(() => {
+        if (state.confirmEndpoint === ep) {
+          state.confirmEndpoint = '';
+          if (state.lastSnap) renderRuntimes(state.lastSnap);
+        }
+      }, 3500);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = tr().stopping;
+    try {
+      await doStop({ endpoint: ep });
+    } catch (err) {
+      showToast(tr().stopFail(err.message || err));
     }
   });
 

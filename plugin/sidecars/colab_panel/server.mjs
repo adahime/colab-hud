@@ -35,21 +35,33 @@ async function runCliJson(args, timeoutMs = 20000) {
   const existingPath = process.env.PYTHONPATH || '';
   const pythonPath = existingPath ? `${pyRoot}${delimiter}${existingPath}` : pyRoot;
 
-  const { stdout } = await execFileAsync(py, ['-m', 'desktop.cli', ...args], {
-    cwd: pyRoot,
-    env: {
-      ...process.env,
-      PYTHONPATH: pythonPath,
-      PYTHONIOENCODING: 'utf-8',
-    },
-    timeout: timeoutMs,
-    windowsHide: true,
-    maxBuffer: 1024 * 1024,
-  });
+  try {
+    const { stdout } = await execFileAsync(py, ['-m', 'desktop.cli', ...args], {
+      cwd: pyRoot,
+      env: {
+        ...process.env,
+        PYTHONPATH: pythonPath,
+        PYTHONIOENCODING: 'utf-8',
+      },
+      timeout: timeoutMs,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+    });
 
-  const text = (stdout || '').trim();
-  if (!text) throw new Error('Empty telemetry output');
-  return JSON.parse(text);
+    const text = (stdout || '').trim();
+    if (!text) throw new Error('Empty telemetry output');
+    return JSON.parse(text);
+  } catch (err) {
+    const raw = (err?.stdout || '').trim();
+    if (raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        // Fall through to rethrow original process error.
+      }
+    }
+    throw err;
+  }
 }
 
 function computeEtag(snap) {
@@ -117,6 +129,22 @@ app.api('/api/probe', async (data) => {
   const res = await runCliJson(args, 30000);
   const refreshed = await getSnapshot(true);
   return { probeResult: res, snapshot: { ...refreshed.snap, etag: refreshed.etag } };
+}, 'POST');
+
+app.api('/api/start', async (data) => {
+  const presetId = String(data?.presetId || '').trim();
+  if (!presetId) return { startResult: { ok: false, error: 'Missing presetId' } };
+  const res = await runCliJson(['--start', presetId], 45000);
+  const refreshed = await getSnapshot(true);
+  return { startResult: res, snapshot: { ...refreshed.snap, etag: refreshed.etag } };
+}, 'POST');
+
+app.api('/api/stop', async (data) => {
+  const args = data?.all ? ['--stop-all'] : ['--stop'];
+  if (!data?.all && data?.endpoint) args.push('--endpoint', String(data.endpoint));
+  const res = await runCliJson(args, 30000);
+  const refreshed = await getSnapshot(true);
+  return { stopResult: res, snapshot: { ...refreshed.snap, etag: refreshed.etag } };
 }, 'POST');
 
 app.api('/api/login', async (data) => {
