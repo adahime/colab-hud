@@ -168,6 +168,42 @@ class TestColabHudTelemetry(unittest.TestCase):
             mock_flow.fetch_token.assert_called_once_with(code="4/0A-TEST-CODE")
             save_mock.assert_called_once_with('{"token": "ok"}')
 
+    def test_pill_skips_redundant_redraws(self) -> None:
+        from desktop.hud_pill import ColabHudPill
+
+        store = telemetry.ColabTelemetryStore(interval_sec=60)
+        pill = ColabHudPill(store=store, lang="zh", alpha=0.94, refresh_ms=1000)
+        try:
+            snap1 = {
+                "authenticated": False,
+                "auth_state": "unauthenticated",
+                "account_email": None,
+                "timestamp_ms": 1000,
+                "balance_cu": None,
+                "rate_cu_hr": None,
+                "assignments_count": 0,
+                "est_hours_left": None,
+                "runtimes": [],
+                "error": "Not signed in",
+            }
+            pill._render_snapshot(snap1)
+            children_first = list(pill.hw_body.winfo_children())
+
+            # Newer poll with identical values should not destroy/recreate runtime widgets.
+            snap2 = dict(snap1, timestamp_ms=11000)
+            pill._render_snapshot(snap2)
+            self.assertEqual(list(pill.hw_body.winfo_children()), children_first)
+
+            # _poll_ui with unchanged snapshot timestamp should skip _render_snapshot completely.
+            with (
+                patch.object(store, "get_snapshot", return_value=snap2),
+                patch.object(pill, "_render_snapshot") as render_mock,
+            ):
+                pill._poll_ui()
+                render_mock.assert_not_called()
+        finally:
+            pill.close()
+
 
 if __name__ == "__main__":
     unittest.main()

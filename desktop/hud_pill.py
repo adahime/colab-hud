@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import tkinter as tk
@@ -148,6 +149,10 @@ def _compact_gpu_tag(rt: Dict[str, Any]) -> str:
     return str(rt.get("summary_label") or rt.get("accelerator") or "VM")
 
 
+def _json_sig(obj: Any) -> str:
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, default=str)
+
+
 class ColabHudPill:
     """Frameless floating pill + expandable breakdown card for Google Colab."""
 
@@ -170,6 +175,10 @@ class ColabHudPill:
         self._drag_origin: Optional[tuple[int, int]] = None
         self._pre_expand_y: Optional[int] = None
         self._last_snap: Optional[Dict[str, Any]] = None
+        self._last_rendered_key: Optional[tuple[Any, ...]] = None
+        self._last_data_sig: Optional[str] = None
+        self._last_runtimes_sig: Optional[str] = None
+        self._last_dot_color: Optional[str] = None
 
         self.root = tk.Tk()
         self.root.title("COLAB-HUD")
@@ -627,6 +636,11 @@ class ColabHudPill:
         menu.tk_popup(event.x_root, event.y_root)
 
     def _render_runtimes(self, runtimes: List[Dict[str, Any]]) -> None:
+        sig = _json_sig({"lang": self.lang, "runtimes": runtimes})
+        if sig == self._last_runtimes_sig:
+            return
+        self._last_runtimes_sig = sig
+
         for child in self.hw_body.winfo_children():
             child.destroy()
 
@@ -641,6 +655,8 @@ class ColabHudPill:
                 justify="left",
                 anchor="w",
             ).pack(fill="x", pady=2)
+            if self.expanded:
+                self._clamp_vertical_for_card()
             return
 
         for rt in runtimes:
@@ -695,8 +711,39 @@ class ColabHudPill:
                 anchor="w",
             ).pack(fill="x", pady=(2, 0))
 
+        if self.expanded:
+            self._clamp_vertical_for_card()
+
+    def _set_dot_color(self, color: str) -> None:
+        if color != self._last_dot_color:
+            self._last_dot_color = color
+            self.dot_canvas.itemconfig(self.dot_id, fill=color)
+
     def _render_snapshot(self, snap: Dict[str, Any]) -> None:
         self._last_snap = snap
+        self._last_rendered_key = (snap.get("timestamp_ms"), self.lang)
+
+        ts_ms = snap.get("timestamp_ms")
+        if ts_ms:
+            clock = time.strftime("%H:%M:%S", time.localtime(ts_ms / 1000))
+            self.updated_label.config(text=self._tr("updated").format(ts=clock))
+
+        data_sig = _json_sig({
+            "lang": self.lang,
+            "authenticated": snap.get("authenticated"),
+            "auth_state": snap.get("auth_state"),
+            "account_email": snap.get("account_email"),
+            "balance_cu": snap.get("balance_cu"),
+            "rate_cu_hr": snap.get("rate_cu_hr"),
+            "est_hours_left": snap.get("est_hours_left"),
+            "assignments_count": snap.get("assignments_count"),
+            "runtimes": snap.get("runtimes"),
+            "error": snap.get("error"),
+        })
+        if data_sig == self._last_data_sig:
+            return
+        self._last_data_sig = data_sig
+
         auth_state = snap.get("auth_state")
         runtimes = snap.get("runtimes") or []
         bal = snap.get("balance_cu")
@@ -705,7 +752,7 @@ class ColabHudPill:
         if not snap.get("authenticated"):
             dot_color = PALETTE["WARN"] if auth_state in ("unauthenticated", "expired") else PALETTE["CRIT"]
             msg_key = "expired" if auth_state == "expired" else ("need_login" if auth_state == "unauthenticated" else "api_err")
-            self.dot_canvas.itemconfig(self.dot_id, fill=dot_color)
+            self._set_dot_color(dot_color)
             self.pill_label.config(text=self._tr(msg_key), fg=PALETTE["FG_MAIN"])
             self.acct_label.config(text=snap.get("error") or self._tr("acct_none"))
             self.val_balance["value"].config(text="--", fg=PALETTE["FG_DIM"])
@@ -733,7 +780,7 @@ class ColabHudPill:
                 dot_color = PALETTE["OK"]
                 pill_text = self._tr("idle_pill").format(bal=_fmt_cu(bal))
 
-            self.dot_canvas.itemconfig(self.dot_id, fill=dot_color)
+            self._set_dot_color(dot_color)
             self.pill_label.config(text=pill_text, fg=PALETTE["FG_MAIN"])
 
             bal_color = PALETTE["OK"] if (bal or 0) > 20 else (PALETTE["WARN"] if (bal or 0) > 5 else PALETTE["CRIT"])
@@ -745,17 +792,12 @@ class ColabHudPill:
             self.btn_probe.config(fg=PALETTE["FG_MAIN"] if runtimes else PALETTE["FG_DIM"])
             self._render_runtimes(runtimes)
 
-        ts_ms = snap.get("timestamp_ms")
-        if ts_ms:
-            clock = time.strftime("%H:%M:%S", time.localtime(ts_ms / 1000))
-            self.updated_label.config(text=self._tr("updated").format(ts=clock))
-
-        self.root.update_idletasks()
-
     def _poll_ui(self) -> None:
         snap = self.store.get_snapshot()
         if snap is not None:
-            self._render_snapshot(snap)
+            key = (snap.get("timestamp_ms"), self.lang)
+            if key != self._last_rendered_key:
+                self._render_snapshot(snap)
         self.root.after(self.refresh_ms, self._poll_ui)
 
     def run(self) -> None:
