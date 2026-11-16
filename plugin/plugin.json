@@ -1,0 +1,12 @@
+{
+  "name": "colab-hud",
+  "displayName": "COLAB-HUD",
+  "version": "0.1.0",
+  "description": "Live Google Colab hardware specs, hourly Compute Unit burn rate, remaining balance, and active VM telemetry HUD.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Open the COLAB-HUD panel",
+    "Check my current Colab GPU model, CU balance, and hourly burn rate",
+    "Probe exact GPU VRAM and system RAM on my active Colab runtime"
+  ]
+}

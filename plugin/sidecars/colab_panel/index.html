@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>COLAB-HUD</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="hud-shell">
+    <header class="hud-header">
+      <div class="title-group">
+        <span class="brand">COLAB-HUD</span>
+        <span id="status-badge" class="badge">
+          <span class="dot"></span>
+          <span id="status-text">Loading...</span>
+        </span>
+      </div>
+      <div class="header-actions">
+        <button id="pill-btn" class="icon-btn" type="button" title="Desktop Pill">Pill</button>
+        <button id="lang-btn" class="icon-btn" type="button">EN</button>
+      </div>
+    </header>
+
+    <div id="account-bar" class="account-bar">
+      <span id="account-text" class="account-text">...</span>
+      <div class="account-actions">
+        <button id="login-btn" class="chip-btn primary" type="button">Sign In</button>
+        <button id="logout-btn" class="chip-btn hidden" type="button">Sign Out</button>
+      </div>
+    </div>
+
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div id="lbl-balance" class="metric-label">CU Balance</div>
+        <div id="val-balance" class="metric-value">--</div>
+        <div id="sub-est" class="metric-sub">--</div>
+      </div>
+      <div class="metric-card">
+        <div id="lbl-rate" class="metric-label">Hourly Burn Rate</div>
+        <div id="val-rate" class="metric-value">--</div>
+        <div id="sub-vms" class="metric-sub">--</div>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head">
+        <span id="lbl-runtimes" class="section-title">Active Runtime & Hardware</span>
+        <div class="section-actions">
+          <button id="probe-btn" class="chip-btn" type="button">Probe GPU</button>
+          <button id="refresh-btn" class="chip-btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div id="runtime-list" class="runtime-list">
+        <div class="empty-card">...</div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <footer class="hud-footer">
+      <span id="updated-line">--</span>
+    </footer>
+  </div>
+
+  <script src="/preload.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

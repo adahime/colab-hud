@@ -1,0 +1,6 @@
+{
+  "name": "colab_panel",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "COLAB-HUD Antigravity side-pane telemetry backend"
+}

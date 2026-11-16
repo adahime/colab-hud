@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colab-hud"
+version = "0.1.0"
+description = "Live GPU/TPU hardware, Compute Unit balance, and hourly burn-rate HUD for Google Colab (Desktop Pill, CLI & Side-Pane Plugin)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "COLAB-HUD Contributors" }
+]
+keywords = [
+    "google-colab",
+    "colab",
+    "compute-units",
+    "gpu-monitor",
+    "hud",
+    "antigravity",
+    "nvidia-smi",
+    "telemetry"
+]
+
+[project.scripts]
+colab-hud = "desktop.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["desktop*"]
